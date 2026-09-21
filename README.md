@@ -61,8 +61,9 @@
 │   ├── manifest.json             # Extension manifest (MV3)
 │   └── content.js                # Content script with UI enhancements
 ├── openresearch-enhancements.user.js # Tampermonkey / Violentmonkey userscript
-├── fl-vlm-reopen-audit.md        # Sample generated research audit deliverable
-├── phase-1---landscape-map...md  # Sample generated research landscape scan
+├── samples/                      # Sample generated research audit deliverables
+│   ├── fl-vlm-reopen-audit.md    # Verified audit report with complete tables
+│   └── phase-1---landscape-map...md # Complex antithesis landscape scan report
 ├── .gitignore                    # Git ignore file
 └── LICENSE                       # MIT License
 ```

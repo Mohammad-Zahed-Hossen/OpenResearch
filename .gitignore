@@ -1,0 +1,9 @@
+# Binary backups and temporary files
+*.bak
+*.tmp
+*.new
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store

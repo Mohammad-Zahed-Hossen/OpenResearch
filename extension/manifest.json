@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "OpenResearch UX Enhancements",
+  "version": "1.2.0",
+  "description": "Adds Copy Buttons, Code Block Copy, and Direct Markdown / File Downloaders to OpenResearch UI",
+  "permissions": ["clipboardWrite"],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1:4791/*",
+        "http://localhost:4791/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -6,9 +6,17 @@
 
   console.log('[OpenResearch UX] Pristine Markdown active.');
 
-  const DL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>';
-  const CP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-  const OK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><path d="m20 6-11 11-5-5"/></svg>';
+  const svg = (p, c = 'currentColor', w = 2) => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="' + w + '">' + p + '</svg>';
+  const DL = svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>');
+  const CP = svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>');
+  const OK = svg('<path d="m20 6-11 11-5-5"/>', '#10b981', 2.5);
+  const BTN_CLS = 'inline-flex items-center justify-center p-1 rounded hover:text-text hover:bg-panel cursor-pointer transition-colors';
+
+  const mkBtn = (tip, icon, cls = BTN_CLS) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = cls;
+    b.title = b.ariaLabel = tip; b.setAttribute('data-tip', tip); b.innerHTML = icon;
+    return b;
+  };
 
   function dl(c, fn) {
     const b = new Blob([c], { type: 'text/markdown;charset=utf-8' });
@@ -31,6 +39,37 @@
   function sId() { const m = location.pathname.match(/\/tasks\/([a-zA-Z0-9_-]+)/); return m ? m[1] : null; }
   function cleanStr(s) { return (s || '').replace(/[\u200B-\u200D\u2060-\u2069\uFEFF]/g, '').trim(); }
 
+  function enrichMd(md) {
+    if (!md) return '';
+    const cb = [], ln = [];
+    md = md.replace(/```[\s\S]*?```/g, m => { cb.push(m); return '@@@C' + (cb.length - 1) + '@@@'; });
+    md = md.replace(/<file\s+path=["']([^"']+)["']\s*\/?>(?:<\/file>)?/gi, (m, p) => {
+      const fn = p.split('/').pop() || p;
+      return '📄 **[' + fn + '](' + p + ')**';
+    });
+    md = md.replace(/\[[^\]]+\]\([^\)]+\)|https?:\/\/[^\s<>"')\]]+/g, m => {
+      if (m.startsWith('http')) m = '<' + m + '>';
+      ln.push(m); return '@@@L' + (ln.length - 1) + '@@@';
+    });
+    md = md.replace(/`?\b(10\.\d{4,9}\/[-._;()/:a-zA-Z0-9]+)\b`?/g, (m, d) => {
+      const c = d.replace(/[.,;:]$/, '');
+      ln.push('[' + c + '](https://doi.org/' + c + ')');
+      return '@@@L' + (ln.length - 1) + '@@@';
+    });
+    md = md.replace(/`?\b(\d{4}\.[a-z]+-[a-z0-9.]+)\b`?/g, (m, a) => {
+      const c = a.replace(/[.,;:]$/, '');
+      ln.push('[' + c + '](https://aclanthology.org/' + c + '/)');
+      return '@@@L' + (ln.length - 1) + '@@@';
+    });
+    md = md.replace(/`?\b(\d{4}\.\d{4,5}(?:v\d+)?)\b`?/g, (m, a) => {
+      ln.push('[' + a + '](https://arxiv.org/abs/' + a + ')');
+      return '@@@L' + (ln.length - 1) + '@@@';
+    });
+    for (let i = ln.length - 1; i >= 0; i--) md = md.replace('@@@L' + i + '@@@', ln[i]);
+    for (let i = cb.length - 1; i >= 0; i--) md = md.replace('@@@C' + i + '@@@', cb[i]);
+    return md;
+  }
+
   async function dlFileByPath(rawPath, fn) {
     const cl = cleanStr(rawPath), rel = cl.replace(/^artifacts[/]/, '');
     let pid = pId();
@@ -47,7 +86,10 @@
             const res = await fetch(u);
             if (res.ok) {
               const txt = await res.text();
-              if (txt && !txt.startsWith('{"error":')) { dl(txt, fn); return true; }
+              if (txt && !txt.startsWith('{"error":')) {
+                dl(fn.endsWith('.md') ? enrichMd(txt) : txt, fn);
+                return true;
+              }
             }
           } catch (x) {}
         }
@@ -71,10 +113,7 @@
     c.querySelectorAll('a').forEach(a => { const h = a.getAttribute('href'); if (h) a.replaceWith('[' + (a.innerText.trim() || h) + '](' + h + ')'); });
     c.querySelectorAll('pre').forEach(p => { const cd = p.querySelector('code'), l = cd ? (cd.className.match(/language-(\w+)/) || ['', ''])[1] : ''; p.replaceWith('\n```' + l + '\n' + (cd ? cd.innerText : p.innerText).trim() + '\n```\n'); });
     c.querySelectorAll('code').forEach(cd => { if (!cd.closest('pre')) cd.replaceWith('`' + cd.innerText.trim() + '`'); });
-    c.querySelectorAll('h1').forEach(h => h.replaceWith('\n# ' + h.innerText.trim() + '\n\n'));
-    c.querySelectorAll('h2').forEach(h => h.replaceWith('\n## ' + h.innerText.trim() + '\n\n'));
-    c.querySelectorAll('h3').forEach(h => h.replaceWith('\n### ' + h.innerText.trim() + '\n\n'));
-    c.querySelectorAll('h4').forEach(h => h.replaceWith('\n#### ' + h.innerText.trim() + '\n\n'));
+    ['h1','h2','h3','h4'].forEach((t, i) => c.querySelectorAll(t).forEach(h => h.replaceWith('\n' + '#'.repeat(i + 1) + ' ' + h.innerText.trim() + '\n\n')));
     c.querySelectorAll('strong,b').forEach(s => s.replaceWith('**' + s.innerText.trim() + '**'));
     c.querySelectorAll('em,i').forEach(em => em.replaceWith('*' + em.innerText.trim() + '*'));
     c.querySelectorAll('li').forEach(l => l.replaceWith('\n- ' + l.innerText.trim()));
@@ -89,16 +128,23 @@
         if (r.ok) {
           const d = await r.json();
           if (d && d.messages) {
-            const m = mId ? d.messages.find(x => x.id === mId) : d.messages.filter(x => x.role === 'assistant').pop();
+            const as = d.messages.filter(x => x.role === 'assistant');
+            let m = mId ? as.find(x => x.id === mId) : null;
+            if (!m && node) {
+              const allAs = Array.from(document.querySelectorAll('.msg-assistant'));
+              const idx = allAs.indexOf(node);
+              if (idx >= 0 && idx < as.length) m = as[idx];
+            }
+            if (!m) m = as[as.length - 1];
             if (m && m.parts) {
               const txts = m.parts.filter(p => p.type === 'text' && p.text && p.text.trim().length > 0).map(p => p.text.trim());
-              if (txts.length) return txts.join('\n\n');
+              if (txts.length) return enrichMd(txts.join('\n\n'));
             }
           }
         }
       } catch (e) {}
     }
-    return domMd(node);
+    return enrichMd(domMd(node));
   }
 
   function injFv() {
@@ -111,20 +157,17 @@
     if (!fp) { try { const p = new URLSearchParams(location.search).get('pane'); if (p) fp = cleanStr(JSON.parse(p).path || ''); } catch (e) {} }
     const fn = fp ? fp.split('/').pop() : 'document.md';
 
-    const b = document.createElement('button'); b.type = 'button';
-    b.className = 'orx-fv-dl inline-flex items-center gap-1.5 py-1 px-2.5 rounded-sm border border-border-variant bg-surface text-text hover:border-text text-xs font-medium cursor-pointer shrink-0';
-    b.setAttribute('data-tip', 'Download ' + fn);
-    b.innerHTML = DL + '<span>Download ' + (fn.endsWith('.md') ? 'Markdown' : 'File') + '</span>';
+    const b = mkBtn('Download ' + fn, DL + '<span>Download ' + (fn.endsWith('.md') ? 'Markdown' : 'File') + '</span>', 'orx-fv-dl inline-flex items-center gap-1.5 py-1 px-2.5 rounded-sm border border-border-variant bg-surface text-text hover:border-text text-xs font-medium cursor-pointer shrink-0');
     b.onclick = async (e) => {
       e.stopPropagation(); b.innerHTML = OK + '<span>Downloading...</span>';
       try {
         let ok = await dlFileByPath(fp, fn);
         if (!ok) {
           const body = fv.querySelector('.fpreview-body');
-          if (body) { const pr = body.querySelector('pre'); const t = pr ? pr.innerText : domMd(body); if (t) { dl(t, fn); ok = true; } }
+          if (body) { const pr = body.querySelector('pre'); const t = pr ? pr.innerText : domMd(body); if (t) { dl(fn.endsWith('.md') ? enrichMd(t) : t, fn); ok = true; } }
         }
         b.innerHTML = ok ? (OK + '<span>Downloaded!</span>') : (DL + '<span>Download</span>');
-      } catch (err) { console.error(err); b.innerHTML = DL + '<span>Download</span>'; }
+      } catch (err) { b.innerHTML = DL + '<span>Download</span>'; }
       setTimeout(() => b.innerHTML = DL + '<span>Download ' + (fn.endsWith('.md') ? 'Markdown' : 'File') + '</span>', 2500);
     };
     const last = hdr.querySelector('button[aria-label*="panel" i], button[title*="panel" i]');
@@ -142,17 +185,9 @@
       const rawPath = m ? m[1] : cleanStr((ch.querySelector('.file-chip-label') || ch).innerText);
       const fn = rawPath.split('/').pop() || 'file.md';
 
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'orx-chip-dl inline-flex items-center justify-center ms-1 p-1 rounded hover:bg-surface border border-border-variant/60 text-subtext hover:text-text cursor-pointer opacity-80 hover:opacity-100 transition-colors align-middle';
-      b.setAttribute('title', 'Download ' + fn);
-      b.setAttribute('data-tip', 'Download ' + fn);
-      b.setAttribute('aria-label', 'Download ' + fn);
-      b.innerHTML = DL;
-
+      const b = mkBtn('Download ' + fn, DL, 'orx-chip-dl inline-flex items-center justify-center ms-1 p-1 rounded hover:bg-surface border border-border-variant/60 text-subtext hover:text-text cursor-pointer opacity-80 hover:opacity-100 transition-colors align-middle');
       b.onclick = async (e) => {
-        e.stopPropagation();
-        e.preventDefault();
+        e.stopPropagation(); e.preventDefault();
         b.innerHTML = OK;
         const ok = await dlFileByPath(rawPath, fn);
         if (!ok) {
@@ -164,7 +199,6 @@
         }
         setTimeout(() => b.innerHTML = DL, 2000);
       };
-
       ch.insertAdjacentElement('afterend', b);
     });
   }
@@ -183,27 +217,14 @@
       bar.className = 'orx-bar flex items-center gap-1 mt-3 mb-1 p-0.5 rounded-md bg-surface/80 border border-border-variant/60 w-fit text-subtext select-none';
       const mw = msg.closest('[data-message-id]'); const mId = mw ? mw.getAttribute('data-message-id') : null;
 
-      const cpb = document.createElement('button'); cpb.type = 'button';
-      cpb.className = 'inline-flex items-center justify-center p-1 rounded hover:text-text hover:bg-panel cursor-pointer transition-colors';
-      cpb.setAttribute('title', 'Copy Response');
-      cpb.setAttribute('data-tip', 'Copy Response');
-      cpb.setAttribute('aria-label', 'Copy Response');
-      cpb.innerHTML = CP;
+      const cpb = mkBtn('Copy Response', CP);
       cpb.onclick = async (e) => {
         e.stopPropagation();
         const txt = await getMsgMd(mId, msg);
-        cp(txt).then(() => {
-          cpb.innerHTML = OK;
-          setTimeout(() => cpb.innerHTML = CP, 2000);
-        });
+        cp(txt).then(() => { cpb.innerHTML = OK; setTimeout(() => cpb.innerHTML = CP, 2000); });
       };
 
-      const dlb = document.createElement('button'); dlb.type = 'button';
-      dlb.className = 'inline-flex items-center justify-center p-1 rounded hover:text-text hover:bg-panel cursor-pointer transition-colors';
-      dlb.setAttribute('title', 'Export Markdown (.md)');
-      dlb.setAttribute('data-tip', 'Export Markdown (.md)');
-      dlb.setAttribute('aria-label', 'Export Markdown (.md)');
-      dlb.innerHTML = DL;
+      const dlb = mkBtn('Export Markdown (.md)', DL);
       dlb.onclick = async (e) => {
         e.stopPropagation();
         const txt = await getMsgMd(mId, msg);
@@ -226,9 +247,7 @@
       const ex = p.querySelectorAll('.orx-cp-code'); if (ex.length > 1) for (let i = 1; i < ex.length; i++) ex[i].remove();
       if (ex.length === 1) return;
       const pos = window.getComputedStyle(p).position; if (pos === 'static') p.style.position = 'relative';
-      const b = document.createElement('button'); b.type = 'button';
-      b.className = 'orx-cp-code absolute top-2 right-2 inline-flex items-center justify-center p-1 rounded bg-surface/90 border border-border-variant text-subtext hover:text-text text-xs cursor-pointer opacity-70 hover:opacity-100 z-10';
-      b.setAttribute('title', 'Copy code'); b.innerHTML = CP;
+      const b = mkBtn('Copy code', CP, 'orx-cp-code absolute top-2 right-2 ' + BTN_CLS + ' bg-surface/90 border border-border-variant text-xs opacity-70 hover:opacity-100 z-10');
       b.onclick = (e) => {
         e.stopPropagation(); const cd = p.querySelector('code') || p;
         cp(cd.innerText).then(() => { b.innerHTML = OK; setTimeout(() => b.innerHTML = CP, 1800); });
@@ -242,8 +261,8 @@
     const cands = document.querySelectorAll('[aria-label="Files"], [aria-label="Artifacts"], [aria-label="Terminal"], [aria-label="Experiments"]');
     if (!cands.length) return;
     const ref = cands[0], parent = ref.parentElement; if (!parent) return;
-    const b = document.createElement('button'); b.id = 'orx-top-dl'; b.type = 'button'; b.className = ref.className;
-    b.setAttribute('aria-label', 'Export Full Session (.md)'); b.setAttribute('data-tip', 'Export Session (.md)'); b.innerHTML = DL;
+    const b = mkBtn('Export Full Session (.md)', DL, ref.className);
+    b.id = 'orx-top-dl';
     b.onclick = async () => {
       const te = document.querySelector('header h1, header h2, .chat-thread h1') || document.querySelector('title');
       let title = te ? te.innerText.trim().replace(/\s*—\s*OpenResearch/i, '') : 'OpenResearch-Output';
@@ -262,14 +281,14 @@
                 const t = m.parts.filter(p => p.type === 'text' && p.text && p.text.trim().length > 0).map(p => p.text.trim()).join('\n\n');
                 if (t) parts.push(t);
               });
-              if (parts.length) { out += parts.join('\n\n---\n\n'); fetched = true; }
+              if (parts.length) { out += enrichMd(parts.join('\n\n---\n\n')); fetched = true; }
             }
           }
         } catch (e) {}
       }
       if (!fetched) {
         const parts = []; document.querySelectorAll('.msg-assistant').forEach(m => { const t = domMd(m); if (t) parts.push(t); });
-        out += parts.join('\n\n---\n\n');
+        out += enrichMd(parts.join('\n\n---\n\n'));
       }
       const sfn = title.replace(/[^a-z0-9_\-\s]/gi, '').replace(/\s+/g, '-').toLowerCase();
       dl(out, sfn + '.md');

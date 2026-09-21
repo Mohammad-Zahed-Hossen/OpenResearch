@@ -338,11 +338,37 @@ namespace OpenResearchDesktop
                 if (!File.Exists(orxPath)) return false;
                 if (!File.Exists(extPath)) return false;
 
+                string uxRaw = File.ReadAllText(extPath, Encoding.UTF8);
+                string uxMin = Regex.Replace(uxRaw, @"(?m)^\s*//.*$", "");
+                uxMin = Regex.Replace(uxMin, @"\s+", " ").Trim();
+                byte[] uxBytes = Encoding.UTF8.GetBytes(uxMin);
+
                 byte[] data = File.ReadAllBytes(orxPath);
-                byte[] marker = Encoding.ASCII.GetBytes("__ORX_UX__");
-                if (IndexOfBytes(data, marker, 0) != -1)
+                byte[] beforeMarker = Encoding.UTF8.GetBytes("document.body)}/*ISC*/");
+                byte[] afterMarker = Encoding.UTF8.GetBytes("const iI=(...e)=>e.filter");
+                int beforeIdx = IndexOfBytes(data, beforeMarker, 0);
+                int afterIdx = IndexOfBytes(data, afterMarker, 0);
+
+                if (beforeIdx != -1 && afterIdx != -1 && afterIdx > beforeIdx)
                 {
-                    return true; // Already patched
+                    int patchStart = beforeIdx + beforeMarker.Length;
+                    int patchLen = afterIdx - patchStart;
+                    if (patchLen == 13940)
+                    {
+                        KillOrxProcesses();
+                        Thread.Sleep(600);
+
+                        int deficit = patchLen - uxBytes.Length;
+                        if (deficit >= 4)
+                        {
+                            string pad = "/*" + new string(' ', deficit - 4) + "*/";
+                            byte[] padBytes = Encoding.ASCII.GetBytes(pad);
+                            Buffer.BlockCopy(uxBytes, 0, data, patchStart, uxBytes.Length);
+                            Buffer.BlockCopy(padBytes, 0, data, patchStart + uxBytes.Length, padBytes.Length);
+                            File.WriteAllBytes(orxPath, data);
+                            return true;
+                        }
+                    }
                 }
 
                 // If currently running, stop before patching binary
@@ -373,25 +399,20 @@ namespace OpenResearchDesktop
                 Buffer.BlockCopy(data, minPos, origRegion, 0, regionLen);
                 string regionStr = Encoding.UTF8.GetString(origRegion);
 
-                string uxRaw = File.ReadAllText(extPath, Encoding.UTF8);
-                string uxMin = Regex.Replace(uxRaw, @"(?m)^\s*//.*$", "");
-                uxMin = Regex.Replace(uxMin, @"\s+", " ").Trim();
-                byte[] uxBytes = Encoding.UTF8.GetBytes(uxMin);
-
                 string replacedStr = regionStr.Replace(targetCommentStr, replacementStr);
                 byte[] replacedBytes = Encoding.UTF8.GetBytes(replacedStr);
 
                 int spaceSaved = origRegion.Length - replacedBytes.Length;
-                int deficit = spaceSaved - uxBytes.Length;
-                if (deficit < 4) return false;
+                int deficitSpace = spaceSaved - uxBytes.Length;
+                if (deficitSpace < 4) return false;
 
-                string pad = "/*" + new string(' ', deficit - 4) + "*/";
+                string padSpace = "/*" + new string(' ', deficitSpace - 4) + "*/";
                 int firstIsc = replacedStr.IndexOf(replacementStr);
                 if (firstIsc == -1) return false;
 
                 string finalRegionStr = replacedStr.Substring(0, firstIsc + replacementStr.Length)
                                       + uxMin
-                                      + pad
+                                      + padSpace
                                       + replacedStr.Substring(firstIsc + replacementStr.Length);
 
                 byte[] newRegionBytes = Encoding.UTF8.GetBytes(finalRegionStr);

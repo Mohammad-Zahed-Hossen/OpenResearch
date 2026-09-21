@@ -42,11 +42,37 @@ public static class OrxPatcher
     {
         try
         {
+            if (!File.Exists(orxPath) || !File.Exists(extPath)) return -1;
+
+            string uxRaw = File.ReadAllText(extPath, Encoding.UTF8);
+            string uxMin = Regex.Replace(uxRaw, @"(?m)^\s*//.*$", "");
+            uxMin = Regex.Replace(uxMin, @"\s+", " ").Trim();
+            byte[] uxBytes = Encoding.UTF8.GetBytes(uxMin);
+
             byte[] data = File.ReadAllBytes(orxPath);
-            byte[] marker = Encoding.ASCII.GetBytes("__ORX_UX__");
-            if (IndexOfBytes(data, marker, 0) != -1)
+            byte[] beforeMarker = Encoding.UTF8.GetBytes("document.body)}/*ISC*/");
+            byte[] afterMarker = Encoding.UTF8.GetBytes("const iI=(...e)=>e.filter");
+            int beforeIdx = IndexOfBytes(data, beforeMarker, 0);
+            int afterIdx = IndexOfBytes(data, afterMarker, 0);
+
+            if (beforeIdx != -1 && afterIdx != -1 && afterIdx > beforeIdx)
             {
-                return 0; // Already patched
+                int patchStart = beforeIdx + beforeMarker.Length;
+                int patchLen = afterIdx - patchStart;
+                if (patchLen == 13940)
+                {
+                    int deficit = patchLen - uxBytes.Length;
+                    if (deficit >= 4)
+                    {
+                        string pad = "/*" + new string(' ', deficit - 4) + "*/";
+                        byte[] padBytes = Encoding.ASCII.GetBytes(pad);
+                        Buffer.BlockCopy(uxBytes, 0, data, patchStart, uxBytes.Length);
+                        Buffer.BlockCopy(padBytes, 0, data, patchStart + uxBytes.Length, padBytes.Length);
+                        File.WriteAllBytes(orxPath, data);
+                        return 1; // Updated successfully
+                    }
+                    return -3;
+                }
             }
 
             const string targetCommentStr = "/**\n * @license lucide-react v1.23.0 - ISC\n *\n * This source code is licensed under the ISC license.\n * See the LICENSE file in the root directory of this source tree.\n */";
@@ -73,25 +99,20 @@ public static class OrxPatcher
             Buffer.BlockCopy(data, minPos, origRegion, 0, regionLen);
             string regionStr = Encoding.UTF8.GetString(origRegion);
 
-            string uxRaw = File.ReadAllText(extPath, Encoding.UTF8);
-            string uxMin = Regex.Replace(uxRaw, @"(?m)^\s*//.*$", "");
-            uxMin = Regex.Replace(uxMin, @"\s+", " ").Trim();
-            byte[] uxBytes = Encoding.UTF8.GetBytes(uxMin);
-
             string replacedStr = regionStr.Replace(targetCommentStr, replacementStr);
             byte[] replacedBytes = Encoding.UTF8.GetBytes(replacedStr);
 
             int spaceSaved = origRegion.Length - replacedBytes.Length;
-            int deficit = spaceSaved - uxBytes.Length;
-            if (deficit < 4) return -3; // Not enough space
+            int deficitSpace = spaceSaved - uxBytes.Length;
+            if (deficitSpace < 4) return -3; // Not enough space
 
-            string pad = "/*" + new string(' ', deficit - 4) + "*/";
+            string padSpace = "/*" + new string(' ', deficitSpace - 4) + "*/";
             int firstIsc = replacedStr.IndexOf(replacementStr);
             if (firstIsc == -1) return -4;
 
             string finalRegionStr = replacedStr.Substring(0, firstIsc + replacementStr.Length)
                                   + uxMin
-                                  + pad
+                                  + padSpace
                                   + replacedStr.Substring(firstIsc + replacementStr.Length);
 
             byte[] newRegionBytes = Encoding.UTF8.GetBytes(finalRegionStr);

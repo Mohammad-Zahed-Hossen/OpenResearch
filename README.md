@@ -37,9 +37,16 @@
 - **Cache-Busting Integration:** In-place cache-busting ensures browsers immediately load the fresh, enhanced JavaScript without serving stale cached files.
 - **1-Click Manual Patcher:** `patch_openresearch.bat` and `patch_openresearch.ps1` are included for command-line or standalone execution.
 
-### 3. 📝 Pristine Markdown Export & Copy
+### 3. 📝 Pristine Markdown Export & Academic Hyperlink Enrichment
 - **API-First Markdown Extraction:** Unlike default DOM scrapers that smash tables onto single lines and strip hyperlinks, the exporter directly queries `/api/chat/sessions/{id}/messages` to retrieve the original, uncorrupted markdown.
-- **Perfect Table & Link Preservation:** Preserves GitHub-Flavored Markdown (GFM) pipe tables (`|---|---|`), nested lists, and full paper links (such as `<https://arxiv.org/...>`).
+- **Automatic Academic Citation Enrichment:** Intelligently detects and transforms raw citations into active, clickable Markdown hyperlinks:
+  - **arXiv IDs:** `2604.25855` / `` `2604.25855` `` ➔ `[2604.25855](https://arxiv.org/abs/2604.25855)`
+  - **DOIs:** `10.1109/...` ➔ `[10.1109/...](https://doi.org/10.1109/...)`
+  - **ACL Anthology IDs:** `2024.findings-acl.767` ➔ `[2024.findings-acl.767](https://aclanthology.org/2024.findings-acl.767/)`
+  - **Bare URLs:** `https://...` ➔ `<https://...>`
+- **Artifact & File Tag Translation:** Converts raw `<file path="artifacts/..." />` XML tags emitted by the model into formatted file links `📄 **[filename](path)**`.
+- **Accurate Turn-Specific Export:** Accurately targets the specific assistant turn clicked (e.g., Turn 1, Turn 2) rather than defaulting to the final message.
+- **Perfect Table & GFM Preservation:** Preserves GitHub-Flavored Markdown (GFM) pipe tables (`|---|---|`), nested lists, and code blocks without distortion.
 - **Offline GFM Fallback:** Fallback parser reconstructs HTML tables and links with GFM formatting if offline.
 
 ### 4. 💬 Minimalist Conversation Toolbar

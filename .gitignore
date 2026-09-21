@@ -1,5 +1,6 @@
 # Binary backups and temporary files
 *.bak
+*.orig
 *.tmp
 *.new
 

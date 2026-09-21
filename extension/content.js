@@ -32,7 +32,7 @@
   function cleanStr(s) { return (s || '').replace(/[\u200B-\u200D\u2060-\u2069\uFEFF]/g, '').trim(); }
 
   async function dlFileByPath(rawPath, fn) {
-    const cl = cleanStr(rawPath), rel = cl.replace(/^artifacts\//, '');
+    const cl = cleanStr(rawPath), rel = cl.replace(/^artifacts[/]/, '');
     let pid = pId();
     if (!pid) {
       try {

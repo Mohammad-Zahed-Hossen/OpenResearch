@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -78,15 +81,23 @@ namespace OpenResearchDesktop
         public static void OpenAppWindow(string browserExePath)
         {
             const string url = "http://127.0.0.1:4791";
+            string appDir = AppDomain.CurrentDomain.BaseDirectory;
+            string extFolder = Path.Combine(appDir, "extension");
 
             try
             {
                 if (!string.IsNullOrEmpty(browserExePath) && File.Exists(browserExePath))
                 {
+                    string args = "--app=" + url;
+                    if (Directory.Exists(extFolder))
+                    {
+                        args += " --load-extension=\"" + extFolder + "\"";
+                    }
+
                     ProcessStartInfo psi = new ProcessStartInfo
                     {
                         FileName = browserExePath,
-                        Arguments = "--app=" + url,
+                        Arguments = args,
                         UseShellExecute = false
                     };
                     Process.Start(psi);
@@ -105,7 +116,6 @@ namespace OpenResearchDesktop
                 MessageBox.Show("Failed to open OpenResearch: " + ex.Message, "OpenResearch Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
     }
 
 
@@ -121,15 +131,24 @@ namespace OpenResearchDesktop
         private Process orxProcess;
         private string appDir;
         private string orxPath;
+        private string extPath;
         private bool isStarting = false;
+        private FileSystemWatcher orxWatcher;
+        private System.Threading.Timer updateDebounceTimer;
 
         public LauncherAppContext()
         {
             appDir = AppDomain.CurrentDomain.BaseDirectory;
             orxPath = Path.Combine(appDir, "orx.exe");
+            extPath = Path.Combine(appDir, @"extension\content.js");
 
             InitializeTray();
+
+            // Auto-check and patch orx.exe if an upstream update replaced it
+            EnsureOrxPatched(false);
+
             StartOrxServer();
+            SetupFileWatcher();
 
             healthCheckTimer = new System.Windows.Forms.Timer();
             healthCheckTimer.Interval = 4000;
@@ -176,6 +195,24 @@ namespace OpenResearchDesktop
 
             contextMenu.Items.Add(new ToolStripSeparator());
 
+            // Re-apply UX enhancements menu item for convenient manual trigger
+            var patchItem = new ToolStripMenuItem("Re-apply UI Enhancements (Fix Missing Buttons)", null, (s, e) =>
+            {
+                bool patched = EnsureOrxPatched(true);
+                if (patched)
+                {
+                    RestartServer();
+                    MessageBox.Show("UI Enhancements (Copy Response, Markdown Export & Deliverable Downloader) are active!", "OpenResearch UX Ready", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show("Could not patch orx.exe. Verify that orx.exe is not locked.", "OpenResearch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            });
+            contextMenu.Items.Add(patchItem);
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
             string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             string artifactsDir = Path.Combine(userProfile, @".local\share\openresearch\files");
             var filesFolderItem = new ToolStripMenuItem("Open Generated Files Folder", null, (s, e) =>
@@ -211,7 +248,6 @@ namespace OpenResearchDesktop
 
             contextMenu.Items.Add(new ToolStripMenuItem("Exit Launcher", null, (s, e) => ExitApplication()));
 
-
             Icon icon = null;
             string icoPath = Path.Combine(appDir, "app.ico");
             if (File.Exists(icoPath))
@@ -236,6 +272,209 @@ namespace OpenResearchDesktop
             };
 
             trayIcon.DoubleClick += (s, e) => Program.OpenAppWindow(Program.GetDefaultBrowser());
+        }
+
+        private void SetupFileWatcher()
+        {
+            try
+            {
+                orxWatcher = new FileSystemWatcher(appDir, "orx.exe");
+                orxWatcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size;
+                orxWatcher.Changed += (s, e) => ScheduleAutoPatchAfterUpdate();
+                orxWatcher.Created += (s, e) => ScheduleAutoPatchAfterUpdate();
+                orxWatcher.EnableRaisingEvents = true;
+            }
+            catch { }
+        }
+
+        private void ScheduleAutoPatchAfterUpdate()
+        {
+            if (updateDebounceTimer != null)
+            {
+                updateDebounceTimer.Dispose();
+            }
+
+            // Wait 1.5 seconds for file write / download to finish completely
+            updateDebounceTimer = new System.Threading.Timer(_ =>
+            {
+                if (!IsOrxPatched(orxPath))
+                {
+                    KillOrxProcesses();
+                    Thread.Sleep(800);
+                    if (EnsureOrxPatched(false))
+                    {
+                        StartOrxServer();
+                        if (trayIcon != null)
+                        {
+                            trayIcon.BalloonTipTitle = "OpenResearch Updated";
+                            trayIcon.BalloonTipText = "App update detected! UI enhancements (copy/download buttons) automatically restored.";
+                            trayIcon.BalloonTipIcon = ToolTipIcon.Info;
+                            trayIcon.ShowBalloonTip(3000);
+                        }
+                    }
+                }
+            }, null, 1500, Timeout.Infinite);
+        }
+
+        public bool IsOrxPatched(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return true;
+                byte[] data = File.ReadAllBytes(path);
+                byte[] marker = Encoding.ASCII.GetBytes("__ORX_UX__");
+                return IndexOfBytes(data, marker, 0) != -1;
+            }
+            catch
+            {
+                return true; // Don't block if locked
+            }
+        }
+
+        public bool EnsureOrxPatched(bool showFeedback)
+        {
+            try
+            {
+                if (!File.Exists(orxPath)) return false;
+                if (!File.Exists(extPath)) return false;
+
+                byte[] data = File.ReadAllBytes(orxPath);
+                byte[] marker = Encoding.ASCII.GetBytes("__ORX_UX__");
+                if (IndexOfBytes(data, marker, 0) != -1)
+                {
+                    return true; // Already patched
+                }
+
+                // If currently running, stop before patching binary
+                KillOrxProcesses();
+                Thread.Sleep(600);
+
+                const string targetCommentStr = "/**\n * @license lucide-react v1.23.0 - ISC\n *\n * This source code is licensed under the ISC license.\n * See the LICENSE file in the root directory of this source tree.\n */";
+                byte[] targetComment = Encoding.UTF8.GetBytes(targetCommentStr);
+                const string replacementStr = "/*ISC*/";
+
+                List<int> matches = new List<int>();
+                int pos = 0;
+                while (true)
+                {
+                    int idx = IndexOfBytes(data, targetComment, pos);
+                    if (idx == -1) break;
+                    matches.Add(idx);
+                    pos = idx + targetComment.Length;
+                }
+
+                if (matches.Count == 0) return false;
+
+                int minPos = matches[0];
+                int maxPos = matches[matches.Count - 1] + targetComment.Length;
+                int regionLen = maxPos - minPos;
+
+                byte[] origRegion = new byte[regionLen];
+                Buffer.BlockCopy(data, minPos, origRegion, 0, regionLen);
+                string regionStr = Encoding.UTF8.GetString(origRegion);
+
+                string uxRaw = File.ReadAllText(extPath, Encoding.UTF8);
+                string uxMin = Regex.Replace(uxRaw, @"(?m)^\s*//.*$", "");
+                uxMin = Regex.Replace(uxMin, @"\s+", " ").Trim();
+                byte[] uxBytes = Encoding.UTF8.GetBytes(uxMin);
+
+                string replacedStr = regionStr.Replace(targetCommentStr, replacementStr);
+                byte[] replacedBytes = Encoding.UTF8.GetBytes(replacedStr);
+
+                int spaceSaved = origRegion.Length - replacedBytes.Length;
+                int deficit = spaceSaved - uxBytes.Length;
+                if (deficit < 4) return false;
+
+                string pad = "/*" + new string(' ', deficit - 4) + "*/";
+                int firstIsc = replacedStr.IndexOf(replacementStr);
+                if (firstIsc == -1) return false;
+
+                string finalRegionStr = replacedStr.Substring(0, firstIsc + replacementStr.Length)
+                                      + uxMin
+                                      + pad
+                                      + replacedStr.Substring(firstIsc + replacementStr.Length);
+
+                byte[] newRegionBytes = Encoding.UTF8.GetBytes(finalRegionStr);
+                if (newRegionBytes.Length != regionLen) return false;
+
+                Buffer.BlockCopy(newRegionBytes, 0, data, minPos, regionLen);
+
+                // Bust browser cache in index.html so web app immediately pulls fresh JS
+                try
+                {
+                    byte[] htmlTag = Encoding.UTF8.GetBytes("<!doctype html>");
+                    int htmlPos = IndexOfBytes(data, htmlTag, 0);
+                    if (htmlPos != -1)
+                    {
+                        int htmlEnd = IndexOfBytes(data, Encoding.UTF8.GetBytes("</html>"), htmlPos);
+                        if (htmlEnd != -1)
+                        {
+                            int hLen = (htmlEnd + 7) - htmlPos;
+                            byte[] hBytes = new byte[hLen];
+                            Buffer.BlockCopy(data, htmlPos, hBytes, 0, hLen);
+                            string hStr = Encoding.UTF8.GetString(hBytes);
+                            const string oldC = "/* Pre-CSS background; keep in sync with --base in src/tailwind.css. */";
+                            const string newC = "/* Pre-CSS background; keep in sync with --base in tailwind.css. */";
+                            if (hStr.Contains(oldC))
+                            {
+                                string newH = hStr.Replace(oldC, newC);
+                                newH = Regex.Replace(newH, @"(src=""/assets/index-[^""]+\.js)""", "$1?v=2\"");
+                                byte[] newHBytes = Encoding.UTF8.GetBytes(newH);
+                                if (newHBytes.Length == hLen)
+                                {
+                                    Buffer.BlockCopy(newHBytes, 0, data, htmlPos, hLen);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                string bak = orxPath + ".orig";
+                if (!File.Exists(bak))
+                {
+                    try { File.Copy(orxPath, bak); } catch { }
+                }
+
+                File.WriteAllBytes(orxPath, data);
+
+                if (showFeedback && trayIcon != null)
+                {
+                    trayIcon.BalloonTipTitle = "UI Enhancements Restored";
+                    trayIcon.BalloonTipText = "OpenResearch was auto-patched with Copy Response & Markdown Downloaders.";
+                    trayIcon.BalloonTipIcon = ToolTipIcon.Info;
+                    trayIcon.ShowBalloonTip(2500);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int IndexOfBytes(byte[] haystack, byte[] needle, int startIndex)
+        {
+            if (needle.Length == 0 || haystack.Length < needle.Length) return -1;
+            int max = haystack.Length - needle.Length;
+            for (int i = startIndex; i <= max; i++)
+            {
+                if (haystack[i] == needle[0])
+                {
+                    bool match = true;
+                    for (int j = 1; j < needle.Length; j++)
+                    {
+                        if (haystack[i + j] != needle[j])
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) return i;
+                }
+            }
+            return -1;
         }
 
         private bool IsPortListening(int port)
@@ -299,6 +538,9 @@ namespace OpenResearchDesktop
                 MessageBox.Show("orx.exe not found in: " + appDir, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+
+            // Ensure orx.exe has UX enhancements before launch
+            EnsureOrxPatched(false);
 
             isStarting = true;
             UpdateServerStatus();
@@ -409,6 +651,17 @@ namespace OpenResearchDesktop
             {
                 healthCheckTimer.Stop();
                 healthCheckTimer.Dispose();
+            }
+
+            if (orxWatcher != null)
+            {
+                orxWatcher.EnableRaisingEvents = false;
+                orxWatcher.Dispose();
+            }
+
+            if (updateDebounceTimer != null)
+            {
+                updateDebounceTimer.Dispose();
             }
 
             if (trayIcon != null)

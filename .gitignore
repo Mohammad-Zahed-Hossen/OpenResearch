@@ -3,6 +3,12 @@
 *.orig
 *.tmp
 *.new
+*.log
+
+# Scratch and diagnostic files
+scratch/
+test_*.js
+*.txt.bak
 
 # OS generated files
 Thumbs.db
